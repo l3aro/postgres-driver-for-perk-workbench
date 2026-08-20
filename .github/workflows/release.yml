@@ -1,0 +1,102 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PLUGIN_NAME: perk-postgres
+  PLUGIN_IDENTITY: postgres
+  GO_VERSION: "1.25.0"
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { goos: darwin, goarch: amd64, runner: macos-13 }
+          - { goos: darwin, goarch: arm64, runner: macos-14 }
+          - { goos: linux, goarch: amd64, runner: ubuntu-latest }
+          - { goos: linux, goarch: arm64, runner: ubuntu-24.04-arm }
+          - { goos: windows, goarch: amd64, runner: windows-latest }
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v4
+      - name: Read pinned compatibility values
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref=$(jq -er '.host.tested_ref' compatibility-manifest.json)
+          [[ "$ref" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq -er '.protocol.version' compatibility-manifest.json)" == 1 ]]
+          [[ "$(jq -er 'if .sdk.version then .sdk.version else (.protocol.sdk | split("@")[1]) end' compatibility-manifest.json)" == v0.1.0 ]]
+          echo "host_ref=$ref" >> "$GITHUB_OUTPUT"
+      - name: Checkout pinned host
+        uses: actions/checkout@v4
+        with:
+          repository: l3aro/perk-workbench
+          ref: ${{ steps.manifest.outputs.host_ref }}
+          path: host
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build target executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .release-work && mkdir -p .release-work
+          suffix=''; [[ '${{ matrix.goos }}' == windows ]] && suffix='.exe'
+          CGO_ENABLED=0 GOOS='${{ matrix.goos }}' GOARCH='${{ matrix.goarch }}' GOTOOLCHAIN=local go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o ".release-work/$PLUGIN_NAME$suffix" "./cmd/$PLUGIN_NAME"
+      - name: Run pinned host plugin test for target
+        working-directory: host
+        shell: bash
+        run: |
+          set -euo pipefail
+          hash_file() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1; else python -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; fi; }
+          suffix=''; [[ '${{ matrix.goos }}' == windows ]] && suffix='.exe'
+          binary="$GITHUB_WORKSPACE/.release-work/$PLUGIN_NAME$suffix"; evidence="$GITHUB_WORKSPACE/.release-work/plugin-test-evidence.json"
+          go run ./cmd/perk-workbench plugin test --json "$binary" > "$evidence"
+          sha=$(hash_file "$binary")
+          jq --arg ref "${{ steps.manifest.outputs.host_ref }}" --arg sha "$sha" '. + {tested_host_ref:$ref, executable_sha256:$sha}' "$evidence" > "$evidence.tmp" && mv "$evidence.tmp" "$evidence"
+          jq -e --arg identity "$PLUGIN_IDENTITY" --arg ref "${{ steps.manifest.outputs.host_ref }}" --arg sha "$sha" '(.evidence_schema == "perk/v1/plugin-test-evidence.schema.json") and (.evidence_version == 1) and (.protocol_version == 1) and (.tested_host_ref == $ref) and (.capabilities.name == $identity) and (.executable_sha256 == $sha) and (.ok == true) and (.failed == 0) and (.passed > 0)' "$evidence" >/dev/null
+      - name: Package target with its own evidence
+        shell: bash
+        run: scripts/release-package.sh '${{ matrix.goos }}' '${{ matrix.goarch }}' "$GITHUB_WORKSPACE/.release-work/dist" "$GITHUB_WORKSPACE/.release-work/plugin-test-evidence.json"
+      - name: Upload target release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            .release-work/dist/*.tar.gz
+            .release-work/dist/*.zip
+            .release-work/dist/*.sha256
+            .release-work/dist/*-release-manifest.json
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download target release files
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ env.PLUGIN_NAME }}-release-*
+          path: ${{ runner.temp }}/release
+          merge-multiple: true
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$PLUGIN_NAME $GITHUB_REF_NAME" --notes "Protocol 1 release with per-target pinned-host conformance evidence."
+          find "$RUNNER_TEMP/release" -type f -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber
