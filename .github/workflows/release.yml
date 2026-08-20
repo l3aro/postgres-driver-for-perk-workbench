@@ -49,11 +49,19 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+      - name: Build pinned host CLI
+        working-directory: host
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/.release-work"
+          host_suffix=''; [[ "${RUNNER_OS:-}" == Windows ]] && host_suffix='.exe'
+          CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$GITHUB_WORKSPACE/.release-work/perk-workbench-host$host_suffix" ./cmd/perk-workbench
       - name: Build target executable
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf .release-work && mkdir -p .release-work
+          mkdir -p .release-work
           suffix=''; [[ '${{ matrix.goos }}' == windows ]] && suffix='.exe'
           CGO_ENABLED=0 GOOS='${{ matrix.goos }}' GOARCH='${{ matrix.goarch }}' GOTOOLCHAIN=local go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o ".release-work/$PLUGIN_NAME$suffix" "./cmd/$PLUGIN_NAME"
       - name: Run pinned host plugin test for target
@@ -63,8 +71,26 @@ jobs:
           set -euo pipefail
           hash_file() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1; else python -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; fi; }
           suffix=''; [[ '${{ matrix.goos }}' == windows ]] && suffix='.exe'
-          binary="$GITHUB_WORKSPACE/.release-work/$PLUGIN_NAME$suffix"; evidence="$GITHUB_WORKSPACE/.release-work/plugin-test-evidence.json"
-          go run ./cmd/perk-workbench plugin test --json "$binary" > "$evidence"
+          host_suffix=''; [[ "${RUNNER_OS:-}" == Windows ]] && host_suffix='.exe'
+          binary="$GITHUB_WORKSPACE/.release-work/$PLUGIN_NAME$suffix"; evidence="$GITHUB_WORKSPACE/.release-work/plugin-test-evidence.json"; test_stderr="$GITHUB_WORKSPACE/.release-work/plugin-test-stderr.log"
+          host_binary="$GITHUB_WORKSPACE/.release-work/perk-workbench-host$host_suffix"
+          host_arg="$host_binary"; binary_arg="$binary"
+          if [[ "${RUNNER_OS:-}" == Windows ]]; then
+            host_arg=$(cygpath -m "$host_binary")
+            binary_arg=$(cygpath -m "$binary")
+          fi
+          set +e
+          "$host_arg" plugin test --json "$binary_arg" > "$evidence" 2> "$test_stderr"
+          status=$?
+          set -e
+          if (( status != 0 )); then
+            echo "plugin test failed with exit status $status" >&2
+            echo "--- plugin-test-evidence.json ---" >&2
+            if [[ -s "$evidence" ]]; then cat "$evidence"; else echo "(empty)"; fi >&2
+            echo "--- plugin-test-stderr.log ---" >&2
+            if [[ -s "$test_stderr" ]]; then cat "$test_stderr"; else echo "(empty)"; fi >&2
+            exit "$status"
+          fi
           sha=$(hash_file "$binary")
           jq --arg ref "${{ steps.manifest.outputs.host_ref }}" --arg sha "$sha" '. + {tested_host_ref:$ref, executable_sha256:$sha}' "$evidence" > "$evidence.tmp" && mv "$evidence.tmp" "$evidence"
           jq -e --arg identity "$PLUGIN_IDENTITY" --arg ref "${{ steps.manifest.outputs.host_ref }}" --arg sha "$sha" '(.evidence_schema == "perk/v1/plugin-test-evidence.schema.json") and (.evidence_version == 1) and (.protocol_version == 1) and (.tested_host_ref == $ref) and (.capabilities.name == $identity) and (.executable_sha256 == $sha) and (.ok == true) and (.failed == 0) and (.passed > 0)' "$evidence" >/dev/null
