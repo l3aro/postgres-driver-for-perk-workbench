@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "plugin": {
+    "name": "perk-postgres",
+    "version": "0.1.0",
+    "version_source": "go.mod module version release tag"
+  },
+  "sdk": {
+    "module": "github.com/l3aro/perk-workbench-plugin-sdk-go",
+    "version": "v0.1.0",
+    "ref": "88af18012ed43b83333213b61bd2004cd345b4e7"
+  },
+  "protocol": {
+    "version": 1
+  },
+  "host": {
+    "tested_ref": "f64c76dfa6e901fa6c1edb8e662554f378d33028",
+    "policy": "Release compatibility is defined only against tested_ref: the exact l3aro/perk-workbench commit whose conformance evidence a release carries."
+  },
+  "release_targets": [
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc"
+  ],
+  "conformance_evidence": {
+    "schema": "perk/v1/plugin-test-evidence.schema.json",
+    "version": 1,
+    "cases": 16
+  }
+}
