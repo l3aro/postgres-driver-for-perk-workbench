@@ -24,8 +24,8 @@ printf 'release paths: dist=%s evidence=%s tested_binary=%s\n' "$DIST" "$EVIDENC
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MANIFEST="$ROOT/compatibility-manifest.json"
 sha256_file() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; return; fi
-  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1; return; fi
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1 | sed 's/^\\//'; return; fi
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1 | sed 's/^\\//'; return; fi
   local python_bin=python3
   command -v "$python_bin" >/dev/null 2>&1 || python_bin=python
   "$python_bin" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"
@@ -47,6 +47,18 @@ fi
 if [[ ! -f "$TESTED_BINARY" || ! -s "$TESTED_BINARY" ]]; then
   echo "missing tested binary: $TESTED_BINARY" >&2
   exit 1
+fi
+EVIDENCE_SHA=
+if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+  EVIDENCE_SHA=$(jq -er '.executable_sha256' "$EVIDENCE" 2>/dev/null || true)
+  if [[ "$EVIDENCE_SHA" =~ ^\\[0-9a-f]{64}$ ]]; then
+    EVIDENCE_SHA=${EVIDENCE_SHA:1}
+    if ! jq --arg sha "$EVIDENCE_SHA" '.executable_sha256 = $sha' "$EVIDENCE" > "$EVIDENCE.tmp" || ! mv "$EVIDENCE.tmp" "$EVIDENCE"; then
+      echo "failed to normalize escaped executable_sha256 in evidence: $EVIDENCE" >&2
+      jq . "$EVIDENCE" >&2 || true
+      exit 1
+    fi
+  fi
 fi
 if ! jq -e --arg identity "$PLUGIN_IDENTITY" --arg ref "$HOST_REF" --argjson protocol "$PROTOCOL" '(.evidence_schema == "perk/v1/plugin-test-evidence.schema.json") and (.evidence_version == 1) and (.protocol_version == $protocol) and (.tested_host_ref == $ref) and (.capabilities.name == $identity) and (.ok == true) and (.failed == 0) and (.passed > 0) and (.executable_sha256 | test("^[0-9a-f]{64}$"))' "$EVIDENCE" >/dev/null; then
   echo "invalid target conformance evidence: $EVIDENCE" >&2
