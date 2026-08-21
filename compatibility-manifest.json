@@ -14,7 +14,7 @@
     "version": 1
   },
   "host": {
-    "tested_ref": "f64c76dfa6e901fa6c1edb8e662554f378d33028",
+    "tested_ref": "1835fa99443054d4b661fb8af238b79ab1a1807e",
     "policy": "Release compatibility is defined only against tested_ref: the exact l3aro/perk-workbench commit whose conformance evidence a release carries."
   },
   "release_targets": [
