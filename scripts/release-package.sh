@@ -5,6 +5,7 @@ GOOS=${1:?GOOS is required}
 GOARCH=${2:?GOARCH is required}
 DIST=${3:?output directory is required}
 EVIDENCE=${4:?target conformance evidence is required}
+TESTED_BINARY=${5:?tested binary is required}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MANIFEST="$ROOT/compatibility-manifest.json"
 sha256_file() {
@@ -26,6 +27,7 @@ HOST_REF=$(jq -er '.host.tested_ref' "$MANIFEST")
 case "$GOOS/$GOARCH" in darwin/amd64|darwin/arm64|linux/amd64|linux/arm64|windows/amd64) ;; *) echo "unsupported target: $GOOS/$GOARCH" >&2; exit 1 ;; esac
 [[ -s "$EVIDENCE" ]] || { echo "missing target conformance evidence: $EVIDENCE" >&2; exit 1; }
 jq -e --arg identity "$PLUGIN_IDENTITY" --arg ref "$HOST_REF" --argjson protocol "$PROTOCOL" '(.evidence_schema == "perk/v1/plugin-test-evidence.schema.json") and (.evidence_version == 1) and (.protocol_version == $protocol) and (.tested_host_ref == $ref) and (.capabilities.name == $identity) and (.ok == true) and (.failed == 0) and (.passed > 0) and (.executable_sha256 | test("^[0-9a-f]{64}$"))' "$EVIDENCE" >/dev/null
+[[ -f "$TESTED_BINARY" && -s "$TESTED_BINARY" ]] || { echo "missing tested binary: $TESTED_BINARY" >&2; exit 1; }
 VERSION=$(jq -r '.plugin.version // "0.1.0"' "$MANIFEST")
 EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct)}
 [[ "$EPOCH" =~ ^[0-9]+$ ]] || { echo "invalid SOURCE_DATE_EPOCH" >&2; exit 1; }
@@ -36,14 +38,10 @@ mkdir -p "$WORK/package" "$DIST"
 EXECUTABLE="$PLUGIN_NAME"
 [[ "$GOOS" == windows ]] && EXECUTABLE+=".exe"
 BINARY="$WORK/package/$EXECUTABLE"
-(
-  cd "$ROOT"
-  export CGO_ENABLED=0 GOOS GOARCH GOTOOLCHAIN=local SOURCE_DATE_EPOCH="$EPOCH"
-  go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$BINARY" "./cmd/$PLUGIN_NAME"
-)
-EXECUTABLE_SHA=$(sha256_file "$BINARY")
+EXECUTABLE_SHA=$(sha256_file "$TESTED_BINARY")
 EXPECTED_SHA=$(jq -er '.executable_sha256' "$EVIDENCE")
 [[ "$EXPECTED_SHA" == "$EXECUTABLE_SHA" ]] || { echo "evidence executable_sha256 does not match target binary" >&2; exit 1; }
+cp "$TESTED_BINARY" "$BINARY"
 cp "$MANIFEST" "$WORK/package/compatibility-manifest.json"
 cp "$EVIDENCE" "$WORK/package/plugin-test-evidence.json"
 ASSET="$PLUGIN_NAME-$GOOS-$GOARCH.tar.gz"

@@ -96,7 +96,10 @@ jobs:
           jq -e --arg identity "$PLUGIN_IDENTITY" --arg ref "${{ steps.manifest.outputs.host_ref }}" --arg sha "$sha" '(.evidence_schema == "perk/v1/plugin-test-evidence.schema.json") and (.evidence_version == 1) and (.protocol_version == 1) and (.tested_host_ref == $ref) and (.capabilities.name == $identity) and (.executable_sha256 == $sha) and (.ok == true) and (.failed == 0) and (.passed > 0)' "$evidence" >/dev/null
       - name: Package target with its own evidence
         shell: bash
-        run: scripts/release-package.sh '${{ matrix.goos }}' '${{ matrix.goarch }}' "$GITHUB_WORKSPACE/.release-work/dist" "$GITHUB_WORKSPACE/.release-work/plugin-test-evidence.json"
+        run: |
+          set -euo pipefail
+          suffix=''; [[ '${{ matrix.goos }}' == windows ]] && suffix='.exe'
+          scripts/release-package.sh '${{ matrix.goos }}' '${{ matrix.goarch }}' "$GITHUB_WORKSPACE/.release-work/dist" "$GITHUB_WORKSPACE/.release-work/plugin-test-evidence.json" "$GITHUB_WORKSPACE/.release-work/$PLUGIN_NAME$suffix"
       - name: Upload target release files
         uses: actions/upload-artifact@v4
         with:
