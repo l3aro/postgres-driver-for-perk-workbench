@@ -6,6 +6,11 @@ GOARCH=${2:?GOARCH is required}
 DIST=${3:?output directory is required}
 EVIDENCE=${4:?target conformance evidence is required}
 TESTED_BINARY=${5:?tested binary is required}
+if [[ "${RUNNER_OS:-}" == "Windows" ]] && command -v cygpath >/dev/null 2>&1; then
+  DIST=$(cygpath -u "$DIST")
+  EVIDENCE=$(cygpath -u "$EVIDENCE")
+  TESTED_BINARY=$(cygpath -u "$TESTED_BINARY")
+fi
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MANIFEST="$ROOT/compatibility-manifest.json"
 sha256_file() {
